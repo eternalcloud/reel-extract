@@ -8,6 +8,13 @@ export class HttpInputError extends Error {
   }
 }
 
+export async function readBoundedBody(
+  _body: ReadableStream<Uint8Array> | null,
+  _maxBytes: number
+): Promise<Uint8Array> {
+  throw new HttpInputError("NOT_IMPLEMENTED", 501);
+}
+
 export async function readBoundedJson(
   request: Request,
   maxBytes = 256_000

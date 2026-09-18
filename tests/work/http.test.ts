@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { HttpInputError, readBoundedJson } from "../../lib/work/http";
+import {
+  HttpInputError,
+  readBoundedBody,
+  readBoundedJson
+} from "../../lib/work/http";
 
 async function expectHttpError(
   promise: Promise<unknown>,
@@ -14,6 +18,31 @@ async function expectHttpError(
     expect(error).toMatchObject({ code, status });
   }
 }
+
+describe("readBoundedBody", () => {
+  it("cancels the stream as soon as the byte limit is exceeded", async () => {
+    let cancelled = false;
+    let emitted = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        emitted += 1;
+        controller.enqueue(new Uint8Array(60));
+        if (emitted >= 5) controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      }
+    });
+
+    await expectHttpError(
+      readBoundedBody(stream, 100),
+      "PAYLOAD_TOO_LARGE",
+      413
+    );
+    expect(cancelled).toBe(true);
+    expect(emitted).toBeLessThan(5);
+  });
+});
 
 describe("readBoundedJson", () => {
   it("accepts application/json and parses the body", async () => {
