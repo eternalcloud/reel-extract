@@ -1,10 +1,11 @@
 import { MemoryWorkStore } from "./memory-store";
 import { PHASE0_JOB_ID, PHASE0_SECRET } from "./phase0-fixture";
 import { hashWorkSecret } from "./security";
+import { SupabaseWorkStore } from "./supabase-store";
 import type { WorkStore } from "./store";
 
 const globalStore = globalThis as typeof globalThis & {
-  __reelExtractPhase0Store?: MemoryWorkStore;
+  __reelExtractPhase0Store?: WorkStore;
 };
 
 function createDevStore(): MemoryWorkStore {
@@ -21,14 +22,34 @@ function createDevStore(): MemoryWorkStore {
   ]);
 }
 
-export function getWorkStore(): WorkStore {
+function createConfiguredStore(): WorkStore {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (supabaseUrl || serviceRoleKey) {
+    if (!supabaseUrl || !serviceRoleKey) {
+      throw new Error(
+        "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured together"
+      );
+    }
+
+    return new SupabaseWorkStore({
+      url: supabaseUrl,
+      serviceRoleKey
+    });
+  }
+
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "No durable WorkStore is configured. Phase 0 memory storage is development-only."
+      "Durable WorkStore is required in production. Configure Supabase."
     );
   }
 
-  globalStore.__reelExtractPhase0Store ??= createDevStore();
+  return createDevStore();
+}
+
+export function getWorkStore(): WorkStore {
+  globalStore.__reelExtractPhase0Store ??= createConfiguredStore();
   return globalStore.__reelExtractPhase0Store;
 }
 
