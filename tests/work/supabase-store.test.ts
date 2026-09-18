@@ -8,12 +8,17 @@ function jsonResponse(value: unknown, status = 200) {
   });
 }
 
+type MockFetch = (
+  input: string | URL | Request,
+  init?: RequestInit
+) => Promise<Response>;
+
 describe("SupabaseWorkStore", () => {
   const url = "https://project.supabase.co";
   const key = "service-role-test-key";
 
   it("maps a PostgREST job row into the domain record", async () => {
-    const fetchImpl = vi.fn(async () =>
+    const fetchImpl = vi.fn<MockFetch>(async (_input, _init) =>
       jsonResponse([
         {
           id: "11111111-1111-4111-8111-111111111111",
@@ -45,7 +50,7 @@ describe("SupabaseWorkStore", () => {
       openedAt: null
     });
 
-    const [requestUrl, init] = fetchImpl.mock.calls[0];
+    const [requestUrl, init] = fetchImpl.mock.calls[0]!;
     expect(String(requestUrl)).toContain("/rest/v1/phase0_work_jobs");
     expect(String(requestUrl)).toContain("id=eq.");
     expect(init?.headers).toMatchObject({
@@ -55,7 +60,9 @@ describe("SupabaseWorkStore", () => {
   });
 
   it("marks opened only for the exact job attempt", async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    const fetchImpl = vi.fn<MockFetch>(
+      async (_input, _init) => new Response(null, { status: 204 })
+    );
     const store = new SupabaseWorkStore({
       url,
       serviceRoleKey: key,
@@ -68,7 +75,7 @@ describe("SupabaseWorkStore", () => {
       Date.parse("2026-09-18T07:30:00.000Z")
     );
 
-    const [requestUrl, init] = fetchImpl.mock.calls[0];
+    const [requestUrl, init] = fetchImpl.mock.calls[0]!;
     expect(String(requestUrl)).toContain("attempt=eq.3");
     expect(init?.method).toBe("PATCH");
     expect(JSON.parse(String(init?.body))).toEqual({
@@ -80,7 +87,9 @@ describe("SupabaseWorkStore", () => {
   it.each(["accept", "replay", "conflict"] as const)(
     "maps atomic RPC disposition %s",
     async (disposition) => {
-      const fetchImpl = vi.fn(async () => jsonResponse(disposition));
+      const fetchImpl = vi.fn<MockFetch>(async (_input, _init) =>
+        jsonResponse(disposition)
+      );
       const store = new SupabaseWorkStore({
         url,
         serviceRoleKey: key,
@@ -95,7 +104,7 @@ describe("SupabaseWorkStore", () => {
       });
 
       expect(result).toBe(disposition);
-      const [requestUrl, init] = fetchImpl.mock.calls[0];
+      const [requestUrl, init] = fetchImpl.mock.calls[0]!;
       expect(String(requestUrl)).toBe(
         "https://project.supabase.co/rest/v1/rpc/phase0_commit_work_result"
       );
@@ -113,7 +122,7 @@ describe("SupabaseWorkStore", () => {
     const failing = new SupabaseWorkStore({
       url,
       serviceRoleKey: key,
-      fetchImpl: async () => jsonResponse({ message: "nope" }, 500)
+      fetchImpl: async (_input, _init) => jsonResponse({ message: "nope" }, 500)
     });
 
     await expect(failing.getJob("x")).rejects.toThrow(/Supabase WorkStore/);
@@ -121,7 +130,7 @@ describe("SupabaseWorkStore", () => {
     const unexpected = new SupabaseWorkStore({
       url,
       serviceRoleKey: key,
-      fetchImpl: async () => jsonResponse("wat")
+      fetchImpl: async (_input, _init) => jsonResponse("wat")
     });
 
     await expect(
