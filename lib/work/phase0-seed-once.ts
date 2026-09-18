@@ -5,9 +5,13 @@ export type ExistingSeed = {
 };
 
 export function canReuseFixedSeed(
-  _existing: ExistingSeed | null,
-  _fixedHash: string,
-  _nowMs = Date.now()
+  existing: ExistingSeed | null,
+  fixedHash: string,
+  nowMs = Date.now()
 ): boolean {
-  return false;
+  return (
+    existing !== null &&
+    existing.secretHash === fixedHash &&
+    existing.secretExpiresAt > nowMs
+  );
 }
