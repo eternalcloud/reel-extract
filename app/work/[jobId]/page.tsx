@@ -1,3 +1,4 @@
+import workResultSchema from "../../../contracts/work-result.schema.json";
 import WorkJobClient from "./work-job-client";
 
 export default async function WorkJobPage({
@@ -6,5 +7,5 @@ export default async function WorkJobPage({
   params: Promise<{ jobId: string }>;
 }) {
   const { jobId } = await params;
-  return <WorkJobClient jobId={jobId} />;
+  return <WorkJobClient jobId={jobId} resultSchema={workResultSchema} />;
 }

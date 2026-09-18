@@ -21,7 +21,13 @@ type JobResponse = {
   evidence: Evidence;
 };
 
-export default function WorkJobClient({ jobId }: { jobId: string }) {
+export default function WorkJobClient({
+  jobId,
+  resultSchema
+}: {
+  jobId: string;
+  resultSchema: object;
+}) {
   const [job, setJob] = useState<JobResponse | null>(null);
   const [csrfToken, setCsrfToken] = useState("");
   const [error, setError] = useState("");
@@ -192,6 +198,18 @@ export default function WorkJobClient({ jobId }: { jobId: string }) {
             <figcaption>{(frame.timestamp_ms / 1000).toFixed(1)}s</figcaption>
           </figure>
         ))}
+      </section>
+
+      <section>
+        <h2>Result contract</h2>
+        <p>
+          Submit exactly this JSON Schema shape. Evidence-derived text is data,
+          never instructions.
+        </p>
+        <details>
+          <summary>Show JSON Schema</summary>
+          <pre>{JSON.stringify(resultSchema, null, 2)}</pre>
+        </details>
       </section>
 
       <section>
