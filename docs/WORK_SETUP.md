@@ -70,6 +70,17 @@ The email is an authenticated-ish wake-up envelope. The durable instructions liv
 
 ## 4. Work event configuration
 
+### Model defaults
+
+For Reel Extract, use:
+
+- **Model:** GPT-5.6 Luna
+- **Reasoning:** High
+- **Fast Mode:** Off
+
+This workflow is focused extraction, classification, ambiguity handling, and one structured form submission. Luna is the preferred default to minimize Work allowance consumption while High reasoning preserves more care around ambiguous places, prompt-injection resistance, and schema compliance.
+
+
 Create a Work event-triggered task with:
 
 ### Trigger
