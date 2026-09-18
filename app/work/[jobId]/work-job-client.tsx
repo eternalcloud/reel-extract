@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
+import { buildStarterResult } from "../../../lib/work/starter-result";
 
 type Evidence = {
   source: { platform: string; url: string; creator: string | null };
@@ -70,13 +71,7 @@ export default function WorkJobClient({
         setJob(loadedJob);
         setResult(
           JSON.stringify(
-            {
-              schema_version: 1,
-              job_id: loadedJob.job_id,
-              attempt: loadedJob.attempt,
-              candidates: [],
-              warnings: []
-            },
+            buildStarterResult(loadedJob.job_id, loadedJob.attempt),
             null,
             2
           )
@@ -214,6 +209,11 @@ export default function WorkJobClient({
 
       <section>
         <h2>Candidate result JSON</h2>
+        <p>
+          Do not submit the starter JSON unchanged. Analyze the caption,
+          transcript and frame first, then replace the candidates placeholder
+          with schema-valid extracted candidates.
+        </p>
         <textarea
           aria-label="Candidate result JSON"
           value={result}
