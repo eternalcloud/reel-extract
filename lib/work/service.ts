@@ -1,7 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { sha256CanonicalJson } from "./canonical-json";
 import { validateWorkResult } from "./contracts";
-import { classifySubmission } from "./idempotency";
 import {
   deriveCsrfToken,
   hashWorkSecret,
@@ -40,7 +39,6 @@ export async function exchangeWorkSecret(input: {
   const nowMs = input.nowMs ?? Date.now();
   const job = await input.store.getJob(input.jobId);
 
-  // Do not disclose whether a job ID exists when the secret is wrong/missing.
   if (!job || !safeStringEqual(hashWorkSecret(input.secret), job.secretHash)) {
     throw new WorkRequestError("INVALID_WORK_SECRET", 401);
   }
@@ -107,30 +105,25 @@ export async function submitWorkResult(input: {
     throw new WorkRequestError("JOB_ATTEMPT_MISMATCH", 409);
   }
 
-  // A signed cookie is not enough: re-read durable state so superseded attempts fail.
   const job = await input.store.getJob(claims.jobId);
   if (!job || job.attempt !== claims.attempt) {
     throw new WorkRequestError("JOB_ATTEMPT_MISMATCH", 409);
   }
 
   const sha256 = sha256CanonicalJson(input.body);
-  const existing = await input.store.getResultSha256(claims.jobId, claims.attempt);
-  const disposition = classifySubmission(existing, sha256);
-
-  if (disposition === "replay") {
-    return { disposition: "replay", sha256 };
-  }
-
-  if (disposition === "conflict") {
-    throw new WorkRequestError("WORK_RESULT_CONFLICT", 409);
-  }
-
-  await input.store.persistResult({
+  const disposition = await input.store.commitResult({
     jobId: claims.jobId,
     attempt: claims.attempt,
     sha256,
     payload: input.body
   });
 
-  return { disposition: "accepted", sha256 };
+  if (disposition === "conflict") {
+    throw new WorkRequestError("WORK_RESULT_CONFLICT", 409);
+  }
+
+  return {
+    disposition: disposition === "accept" ? "accepted" : "replay",
+    sha256
+  };
 }
