@@ -11,7 +11,7 @@ function required(name) {
 }
 
 const supabaseUrl = required("SUPABASE_URL").replace(/\/$/, "");
-const serviceRoleKey = required("SUPABASE_SERVICE_ROLE_KEY");
+const secretKey = required("SUPABASE_SECRET_KEY");
 const appOrigin = new URL(required("APP_ORIGIN")).origin;
 
 const secret = randomBytes(32).toString("base64url");
@@ -23,8 +23,7 @@ const response = await fetch(
   {
     method: "POST",
     headers: {
-      apikey: serviceRoleKey,
-      authorization: `Bearer ${serviceRoleKey}`,
+      apikey: secretKey,
       "content-type": "application/json",
       accept: "application/json"
     },

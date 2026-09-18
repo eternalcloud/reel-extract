@@ -25,23 +25,22 @@ const JOB_SELECT =
 
 export class SupabaseWorkStore implements WorkStore {
   private readonly baseUrl: string;
-  private readonly serviceRoleKey: string;
+  private readonly secretKey: string;
   private readonly fetchImpl: FetchLike;
 
   constructor(config: {
     url: string;
-    serviceRoleKey: string;
+    secretKey: string;
     fetchImpl?: FetchLike;
   }) {
     this.baseUrl = config.url.replace(/\/$/, "");
-    this.serviceRoleKey = config.serviceRoleKey;
+    this.secretKey = config.secretKey;
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return {
-      apikey: this.serviceRoleKey,
-      authorization: `Bearer ${this.serviceRoleKey}`,
+      apikey: this.secretKey,
       accept: "application/json",
       ...extra
     };
@@ -82,7 +81,10 @@ export class SupabaseWorkStore implements WorkStore {
 
     const secretExpiresAt = Date.parse(row.secret_expires_at);
     const openedAt = row.opened_at === null ? null : Date.parse(row.opened_at);
-    if (!Number.isFinite(secretExpiresAt) || (openedAt !== null && !Number.isFinite(openedAt))) {
+    if (
+      !Number.isFinite(secretExpiresAt) ||
+      (openedAt !== null && !Number.isFinite(openedAt))
+    ) {
       throw new Error("Supabase WorkStore returned invalid job timestamps");
     }
 
@@ -97,7 +99,11 @@ export class SupabaseWorkStore implements WorkStore {
     };
   }
 
-  async markOpened(jobId: string, attempt: number, openedAt: number): Promise<void> {
+  async markOpened(
+    jobId: string,
+    attempt: number,
+    openedAt: number
+  ): Promise<void> {
     const url = new URL(`${this.baseUrl}/rest/v1/phase0_work_jobs`);
     url.searchParams.set("id", `eq.${jobId}`);
     url.searchParams.set("attempt", `eq.${attempt}`);
@@ -144,7 +150,9 @@ export class SupabaseWorkStore implements WorkStore {
       disposition !== "conflict"
     ) {
       throw new Error(
-        `Supabase WorkStore returned unexpected disposition: ${String(disposition)}`
+        `Supabase WorkStore returned unexpected disposition: ${String(
+          disposition
+        )}`
       );
     }
 

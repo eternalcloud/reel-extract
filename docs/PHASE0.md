@@ -19,7 +19,9 @@ Configure:
 - `APP_ORIGIN`
 - `WORK_SESSION_SIGNING_KEY`
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_SECRET_KEY`
+
+Use a modern Supabase secret key in `sb_secret_...` format. It is sent only in the `apikey` header from server-side code and must never be exposed to the browser.
 
 Apply:
 
@@ -27,7 +29,7 @@ Apply:
 supabase/migrations/0001_phase0_work.sql
 ```
 
-The database tables have RLS enabled and no anon/authenticated policies. The atomic result function is executable only by `service_role`.
+The database tables have RLS enabled and no anon/authenticated policies. The atomic result function is executable only by the elevated server role represented by the Supabase secret key.
 
 A successful Work result is persisted atomically as:
 
@@ -45,12 +47,11 @@ npm run phase0:seed
 
 The script:
 
-1. reads the current attempt;
-2. increments it, revoking any earlier scoped session;
-3. generates a fresh 256-bit fragment secret;
-4. stores only its SHA-256 hash;
-5. sets a 24-hour expiry;
-6. prints the exact `JOB_URL` and Gmail trigger envelope.
+1. atomically increments the current attempt, revoking any earlier scoped session;
+2. generates a fresh 256-bit fragment secret;
+3. stores only its SHA-256 hash;
+4. sets a 24-hour expiry;
+5. prints the exact `JOB_URL` and Gmail trigger envelope.
 
 Do not copy the fragment secret into logs, issues, or committed files.
 

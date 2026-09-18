@@ -15,9 +15,9 @@ type MockFetch = (
 
 describe("SupabaseWorkStore", () => {
   const url = "https://project.supabase.co";
-  const key = "sb_secret_phase0_test_key";
+  const key = "service-role-test-key";
 
-  it("maps a PostgREST job row into the domain record using a modern secret key", async () => {
+  it("maps a PostgREST job row into the domain record", async () => {
     const fetchImpl = vi.fn<MockFetch>(async (_input, _init) =>
       jsonResponse([
         {
@@ -34,7 +34,7 @@ describe("SupabaseWorkStore", () => {
 
     const store = new SupabaseWorkStore({
       url,
-      secretKey: key,
+      serviceRoleKey: key,
       fetchImpl
     });
 
@@ -54,9 +54,9 @@ describe("SupabaseWorkStore", () => {
     expect(String(requestUrl)).toContain("/rest/v1/phase0_work_jobs");
     expect(String(requestUrl)).toContain("id=eq.");
     expect(init?.headers).toMatchObject({
-      apikey: key
+      apikey: key,
+      authorization: `Bearer ${key}`
     });
-    expect(init?.headers).not.toHaveProperty("authorization");
   });
 
   it("marks opened only for the exact job attempt", async () => {
@@ -65,7 +65,7 @@ describe("SupabaseWorkStore", () => {
     );
     const store = new SupabaseWorkStore({
       url,
-      secretKey: key,
+      serviceRoleKey: key,
       fetchImpl
     });
 
@@ -92,7 +92,7 @@ describe("SupabaseWorkStore", () => {
       );
       const store = new SupabaseWorkStore({
         url,
-        secretKey: key,
+        serviceRoleKey: key,
         fetchImpl
       });
 
@@ -121,7 +121,7 @@ describe("SupabaseWorkStore", () => {
   it("fails closed on a non-success response or unexpected RPC value", async () => {
     const failing = new SupabaseWorkStore({
       url,
-      secretKey: key,
+      serviceRoleKey: key,
       fetchImpl: async (_input, _init) => jsonResponse({ message: "nope" }, 500)
     });
 
@@ -129,7 +129,7 @@ describe("SupabaseWorkStore", () => {
 
     const unexpected = new SupabaseWorkStore({
       url,
-      secretKey: key,
+      serviceRoleKey: key,
       fetchImpl: async (_input, _init) => jsonResponse("wat")
     });
 

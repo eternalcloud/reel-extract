@@ -24,18 +24,18 @@ function createDevStore(): MemoryWorkStore {
 
 function createConfiguredStore(): WorkStore {
   const supabaseUrl = process.env.SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const secretKey = process.env.SUPABASE_SECRET_KEY;
 
-  if (supabaseUrl || serviceRoleKey) {
-    if (!supabaseUrl || !serviceRoleKey) {
+  if (supabaseUrl || secretKey) {
+    if (!supabaseUrl || !secretKey) {
       throw new Error(
-        "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured together"
+        "SUPABASE_URL and SUPABASE_SECRET_KEY must be configured together"
       );
     }
 
     return new SupabaseWorkStore({
       url: supabaseUrl,
-      serviceRoleKey
+      secretKey
     });
   }
 
