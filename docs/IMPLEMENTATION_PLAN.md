@@ -1,17 +1,72 @@
 # Implementation Plan
 
-## Strategy
+## 1. Objective
 
-Do not build the full application in one pass.
+Implement the V1 flow:
 
-There are two external uncertainties that should be proven before investing in UI polish:
+```text
+Share Instagram Reel
+→ capture created
+→ local worker builds evidence
+→ Gmail triggers ChatGPT Work
+→ Work extracts candidate places/websites
+→ user reviews
+→ user confirms
+→ canonical entities saved
+→ temporary media purged
+```
 
-1. **Can ChatGPT Work reliably perform Gmail-triggered analysis and write the result back through the scoped job page?**
-2. **How reliably can the chosen local acquisition adapter obtain representative Instagram Reels?**
+The implementation must preserve these invariants:
 
-Everything else is conventional application engineering.
+1. No metered LLM API dependency.
+2. AI output never becomes canonical without explicit user confirmation.
+3. Instagram acquisition remains replaceable behind an adapter.
+4. Every external boundary is retryable and idempotent.
+5. No Instagram credentials or browser cookies are stored in cloud services.
+6. Work gets only job-scoped read-evidence / submit-candidates capability.
+7. Raw media is temporary by default.
+8. Every nonterminal state has a recovery path; no permanent spinner states.
 
-The order below intentionally tests those risks first.
+---
+
+## 2. Build strategy
+
+Build risk-first, not screen-first.
+
+```text
+Phase 0  Work capability spike
+   ↓
+Phase 1  App/data foundation
+   ↓
+Phase 2  Android Share Target
+   ↓
+Phase 3  Worker protocol
+   ↓
+Phase 4  Instagram acquisition spike
+   ↓
+Phase 5  Evidence preparation
+   ↓
+Phase 6  Production Work trigger
+   ↓
+Phase 7  Candidate review + confirmation
+   ↓
+Phase 8  Library + retention
+   ↓
+Phase 9  Hardening + operational readiness
+```
+
+Two uncertainties must be resolved before significant UI polish:
+
+- whether ChatGPT Work can complete the Gmail-triggered job and unattended scoped callback;
+- how reliably the selected local acquisition adapter can obtain representative Instagram Reels.
+
+Everything else should depend on stable interfaces, not on either implementation detail.
+
+### Stop/go rule
+
+A phase is complete only when its acceptance criteria pass. A failed external capability test must select the documented fallback before later phases depend on it.
+
+Do not temporarily bypass security or idempotency to make a demo pass.
 
 ---
 
@@ -19,213 +74,355 @@ The order below intentionally tests those risks first.
 
 ## Goal
 
-Prove:
+Prove the unusual part of the architecture before building Instagram acquisition:
 
 ```text
-Gmail event
-  → Work starts
-  → Work opens job page
-  → Work analyzes supplied synthetic evidence
-  → Work submits valid JSON
-  → app receives candidates
+Synthetic evidence
+→ Gmail trigger
+→ Work starts
+→ Work opens scoped job page
+→ Work analyses evidence
+→ Work submits schema-valid JSON
+→ app persists candidates
 ```
 
-No Instagram integration yet.
+No Instagram integration is required.
 
-## Build
+## 0.1 Minimal application
 
-### Minimal app
+Create a Next.js App Router application with:
 
-- one hard-coded authenticated test user;
-- one fake capture;
-- one fake evidence bundle;
-- one `/work/<job-id>#<secret>` page;
-- fragment-secret exchange;
-- job-scoped session cookie;
-- JSON result form;
-- server-side JSON Schema validation;
-- a simple page showing received result.
+```text
+/work/[jobId]
+/api/work/session
+/api/work/job/[jobId]
+/api/work/result
+/dev/phase-0
+```
 
-### Synthetic evidence
+The Work page is intentionally isolated from normal app navigation and third-party scripts.
 
-Include:
+## 0.2 Durable storage requirement
+
+Local unit tests may use an in-memory store.
+
+A deployed Phase 0 acceptance test **must use durable storage**. A Vercel/serverless memory store cannot count as a passing test because separate requests may execute on different instances.
+
+Initial durable implementation: Supabase/Postgres using only the Phase 0 subset of the final schema.
+
+Minimum persisted records:
+
+- synthetic capture;
+- evidence artifacts;
+- AI job + attempt;
+- Work secret hash + expiry;
+- immutable raw result;
+- normalized candidates;
+- audit events.
+
+## 0.3 Synthetic fixture
+
+Create deterministic evidence containing:
 
 - caption naming Place A;
 - transcript naming Place B;
-- image/frame showing `example.com`;
-- one intentionally ambiguous venue;
-- one explicit prompt injection line.
+- frame displaying a website;
+- one ambiguous venue requiring verification;
+- one explicit prompt-injection string.
 
-### Gmail
+The malicious string must remain visible as ordinary evidence and must never be copied into trusted task instructions.
 
-- connect Gmail to ChatGPT;
-- create Work event-triggered task;
-- sender + subject filter;
-- send fixed machine envelope.
+## 0.4 Work secret and session
 
-## Pass criteria
+Generate a 256-bit secret from a CSPRNG.
 
-- [ ] trigger runs from a new Gmail message;
-- [ ] Work ignores the embedded prompt injection;
-- [ ] Work opens only the configured app origin;
-- [ ] fragment secret is exchanged successfully;
-- [ ] callback secret is absent from normal HTTP URL logs;
-- [ ] Work submits JSON matching schema;
-- [ ] repeat submission is idempotent;
-- [ ] conflicting repeat is rejected;
+Persist only:
+
+```text
+SHA-256(secret)
+job ID
+attempt
+expiry
+status
+```
+
+The job URL is:
+
+```text
+https://<origin>/work/<job-id>#<secret>
+```
+
+The fragment is exchanged client-side through `/api/work/session`, then removed with `history.replaceState`.
+
+A successful exchange creates a short-lived, signed, job-scoped `HttpOnly; Secure; SameSite=Strict` session cookie.
+
+The session may only:
+
+- read evidence for the exact job/attempt;
+- submit one candidate result for the exact job/attempt.
+
+It may never:
+
+- access another capture;
+- list the user's library;
+- create or merge canonical entities;
+- mutate capture ownership;
+- obtain service-role credentials.
+
+Every result submission re-checks the current job attempt in durable storage. A previously issued cookie is not sufficient if the attempt has been revoked or superseded.
+
+## 0.5 CSRF and origin controls
+
+Result submission must require all of:
+
+- valid scoped session;
+- exact expected `Origin` when present;
+- same-origin request;
+- JSON content type;
+- CSRF token bound to the scoped session;
+- job ID + attempt matching the session and body.
+
+Do not rely on SameSite cookies as the only CSRF control.
+
+## 0.6 Result validation and idempotency
+
+Use `contracts/work-result.schema.json` as the canonical contract.
+
+Submission pipeline:
+
+```text
+authenticate scoped session
+→ verify active job + attempt
+→ verify CSRF/origin
+→ enforce request byte limit
+→ parse JSON
+→ validate JSON Schema
+→ canonicalize/hash payload bytes
+→ check existing result
+→ persist immutable raw result
+→ normalize candidates
+→ transition to CANDIDATES_READY
+→ audit
+→ revoke write capability for attempt
+```
+
+Rules:
+
+- identical replay after successful submission returns success idempotently;
+- different second result for the same attempt returns conflict and is audited;
+- an expired/revoked/superseded attempt cannot submit;
+- malformed results never partially create candidates;
+- candidates and raw result commit in one transaction where practical.
+
+## 0.7 Gmail + Work
+
+Use the task in `WORK_SETUP.md`.
+
+The trigger contains only:
+
+```text
+SCHEMA
+JOB_ID
+ATTEMPT
+JOB_URL
+```
+
+No caption, transcript, OCR, frame text, or user-authored instructions are included in the trigger message.
+
+## Phase 0 acceptance gate
+
+- [ ] new Gmail message reliably starts the configured Work task;
+- [ ] Work opens only the configured application origin;
+- [ ] fragment secret exchange succeeds;
+- [ ] secret is absent from normal HTTP request URLs/logs;
+- [ ] Work reads caption, transcript and frame evidence;
+- [ ] embedded prompt injection is treated as untrusted data;
+- [ ] ambiguous venue is handled conservatively;
+- [ ] result validates against the JSON Schema;
+- [ ] durable raw result and candidates are persisted;
+- [ ] identical replay is idempotent;
+- [ ] conflicting replay is rejected;
 - [ ] expired attempt cannot submit;
-- [ ] a new attempt revokes the old one;
-- [ ] result creates candidates only;
-- [ ] no recurring manual approval is required for the normal writeback path.
+- [ ] new attempt revokes old attempt capability;
+- [ ] no canonical entity is created;
+- [ ] normal callback path does not repeatedly require manual approval.
 
-## Decision gate
+### Decision gate
 
-### If all pass
-
-Proceed with automatic Work writeback.
-
-### If analysis works but unattended writeback does not
-
-Proceed with:
+If Work analysis succeeds but unattended browser writeback is unavailable or repeatedly pauses for approval:
 
 ```text
 Work analysis
-→ exact JSON in task output
-→ app "Import Work JSON"
-→ normal confirmation
+→ exact JSON in Work result
+→ Import Work JSON in app
+→ candidates
+→ normal human confirmation
 ```
 
-Keep automatic writeback as a separate enhancement.
-
-Do not introduce a metered LLM API merely to bridge this gap.
+This is an accepted V1 fallback. Do not add a metered LLM API merely to bridge the callback.
 
 ---
 
-# Phase 1 — App skeleton and data integrity
+# Phase 1 — App foundation and data integrity
 
 ## Goal
 
-Build the durable capture/review model before Instagram media acquisition.
+Build the durable domain model before media acquisition.
 
-## Build
+## 1.1 Application
 
-### Next.js PWA
+Next.js App Router, mobile-first PWA:
 
-- App Router;
-- installable manifest;
-- Web Share Target endpoint;
-- mobile-first Inbox;
+- Inbox;
 - capture detail;
-- review screen;
-- saved entities screen.
+- candidate review;
+- Library;
+- isolated Work job route;
+- Share Target route.
 
-### Supabase
+## 1.2 Supabase
 
-- Auth;
-- Postgres schema;
-- RLS;
-- temporary Storage bucket;
-- migrations;
-- seed/dev fixtures.
+Create explicit migrations for:
 
-### Auth
+```text
+captures
+capture_artifacts
+ai_jobs
+ai_raw_results
+candidates
+entities
+entity_sources
+audit_events
+```
+
+Add explicit constraints, foreign keys, indexes and RLS. Do not make lifecycle-critical fields depend solely on JSON blobs.
+
+Recommended indexes:
+
+```text
+captures(owner_id, source_fingerprint)
+captures(owner_id, status)
+capture_artifacts(capture_id)
+capture_artifacts(expires_at)
+ai_jobs(capture_id, attempt)
+candidates(capture_id)
+entities(owner_id, kind)
+entity_sources(capture_id)
+audit_events(capture_id, created_at)
+```
+
+## 1.3 Authentication
 
 V1:
 
-- Google sign-in;
+- Google sign-in through Supabase Auth;
 - server-side owner allowlist;
-- no public registration workflow.
+- no public registration;
+- RLS on all owner-visible tables.
 
-### State machine
+Service-role credentials remain server-only.
 
-Implement allowed state transitions as one server-side function/service.
+## 1.4 State machine
 
-No page directly writes arbitrary statuses.
+All capture transitions go through one server-side domain service.
 
-### Audit events
+No page or generic CRUD endpoint may write arbitrary statuses.
 
-Every meaningful transition generates an append-only event.
+A transition and its audit event should be committed atomically.
 
-## Tests
+## 1.5 Confirmation boundary
 
-- RLS tests;
-- state-transition tests;
-- duplicate-share tests;
-- stale-review revision tests;
-- confirmation transaction tests;
-- retention metadata tests.
+Canonical entity creation happens only through a dedicated confirmation transaction:
 
-## Pass criteria
+```text
+validate review revision
+→ validate selected candidates
+→ resolve explicit merge choices
+→ create/update/link entities
+→ create entity_sources
+→ update candidate review state
+→ transition capture
+→ append audit event
+```
 
-- [ ] unauthenticated user cannot read/write data;
-- [ ] duplicate share does not create duplicate capture;
-- [ ] candidate cannot become entity without confirmation endpoint;
-- [ ] stale client cannot overwrite newer review;
-- [ ] audit history reconstructs a capture lifecycle.
+Candidate creation and entity confirmation are separate capabilities.
+
+## Phase 1 acceptance gate
+
+- [ ] unauthenticated users cannot read/write owner data;
+- [ ] RLS prevents cross-owner access;
+- [ ] duplicate source fingerprint cannot create a parallel capture for the same owner;
+- [ ] invalid state transitions fail closed;
+- [ ] candidate records cannot create entities without confirmation;
+- [ ] stale review revision cannot overwrite a newer review;
+- [ ] audit history reconstructs the capture lifecycle.
 
 ---
 
-# Phase 2 — Share Target
+# Phase 2 — Android Share Target
 
 ## Goal
 
-Make capture friction effectively one action after Instagram Share.
+One Instagram Share should create or foreground a capture.
 
 ## Build
 
-Manifest concept:
+Manifest accepts POSTed:
 
-```json
-{
-  "share_target": {
-    "action": "/share",
-    "method": "POST",
-    "enctype": "multipart/form-data",
-    "params": {
-      "title": "title",
-      "text": "text",
-      "url": "url"
-    }
-  }
-}
+```text
+title
+text
+url
 ```
 
-The route:
+Server pipeline:
 
-1. parses all share fields;
-2. extracts candidate URLs;
-3. validates supported source host;
-4. canonicalizes Reel URL;
-5. creates/finds capture;
-6. redirects to capture status page.
+```text
+receive share
+→ extract all HTTP(S) URL candidates
+→ validate supported source
+→ canonicalize Reel URL
+→ fingerprint
+→ find/create capture
+→ queue acquisition
+→ redirect to capture
+```
 
-## Edge cases
+Fingerprint:
 
-Test Instagram shares where:
+```text
+SHA-256(platform + canonical_url)
+```
 
-- URL arrives in `text`;
-- text contains commentary plus URL;
-- several URLs exist;
-- URL has tracking params;
-- URL is a redirect;
-- unsupported Instagram path;
-- no URL;
-- same Reel already exists.
+Instagram may place the URL inside `text`; test that path explicitly.
 
-## Offline behavior
+## URL safety
 
-V1 can fail visibly when offline with a retry/copy option.
+Do not perform arbitrary server-side fetches merely to parse the share.
 
-Do not make Background Sync a launch dependency because browser support/behavior varies.
+If redirect resolution is required later:
 
-Later, an IndexedDB outbox can improve offline capture.
+- allow only HTTP(S);
+- bound redirect count;
+- validate each hop;
+- reject loopback, link-local, RFC1918/private, metadata-service and disallowed IP ranges;
+- require the final host to match a configured source adapter.
 
-## Pass criteria
+## Duplicate semantics
 
-- [ ] installed PWA appears in Android share sheet;
-- [ ] one Instagram Share creates/opens correct capture;
-- [ ] unsupported URLs fail safely;
-- [ ] no arbitrary server-side URL fetch occurs during parsing.
+- active capture → foreground existing capture;
+- confirmed capture → show saved items + optional explicit reprocess;
+- failed capture → new processing attempt under same capture;
+- never create duplicate canonical entities silently.
+
+## Phase 2 acceptance gate
+
+- [ ] installed PWA appears in Android Share sheet;
+- [ ] URL-in-text shares work;
+- [ ] commentary + URL works;
+- [ ] duplicate share returns existing capture;
+- [ ] unsupported source fails visibly;
+- [ ] parser performs no arbitrary URL fetch.
 
 ---
 
@@ -233,11 +430,9 @@ Later, an IndexedDB outbox can improve offline capture.
 
 ## Goal
 
-Create an outbound-only local worker with no broad cloud credentials.
+Create an outbound-only worker with narrowly scoped cloud access.
 
-## Backend endpoints
-
-Conceptually:
+## Backend protocol
 
 ```text
 POST /api/worker/claim
@@ -249,119 +444,109 @@ POST /api/worker/:captureId/fail
 
 Worker authentication:
 
-- high-entropy `WORKER_SHARED_SECRET`;
+- high-entropy dedicated secret;
 - HTTPS only;
-- rate-limited;
-- independently rotatable.
+- independently rotatable;
+- rate limited.
 
-The worker receives:
+The worker receives only:
 
 - capture ID;
 - canonical source URL;
 - acquisition attempt;
-- short-lived upload grants;
-- configured limits.
+- configured resource limits;
+- short-lived per-job upload grants.
 
-It does **not** receive:
+It never receives:
 
-- service-role key;
+- Supabase service-role key;
 - user session;
-- Work credentials;
-- other captures.
+- Work callback secret;
+- unrelated capture data.
 
-## Worker container
+## Leasing
 
-Recommended components:
+A claim creates a bounded lease.
 
-- Python or Node control process;
-- acquisition adapter;
-- ffprobe;
-- ffmpeg;
-- whisper.cpp;
-- temporary working directory.
+If the worker dies, a stale lease becomes reclaimable without creating a second concurrent active attempt.
 
-Container constraints:
+All completion/failure calls are idempotent.
+
+## Container constraints
 
 - non-root;
 - no privileged mode;
 - no Docker socket;
-- CPU/memory/PID limits;
-- bounded temp disk;
-- network access only as needed;
-- explicit process timeouts.
+- explicit CPU/memory/PID/temp-disk limits;
+- process timeouts;
+- narrow filesystem mounts;
+- network only as required.
 
-## Heartbeat
+## Phase 3 acceptance gate
 
-Worker reports:
-
-- version;
-- current capture ID;
-- phase;
-- last-seen time.
-
-UI can distinguish:
-
-- queue waiting normally;
-- worker offline;
-- worker processing;
-- worker failed.
-
-## Pass criteria
-
-- [ ] cloud cannot initiate network connection to worker;
-- [ ] worker cannot query DB directly;
-- [ ] worker secret alone cannot list library data;
-- [ ] worker crash leaves capture retryable;
-- [ ] duplicate completion call is safe.
+- [ ] cloud cannot initiate an inbound connection to worker;
+- [ ] worker cannot query owner/library data;
+- [ ] two workers cannot concurrently own one acquisition attempt;
+- [ ] stale lease recovers safely;
+- [ ] duplicate completion is harmless;
+- [ ] worker secret alone cannot enumerate captures.
 
 ---
 
-# Phase 4 — Acquisition spike
+# Phase 4 — Instagram acquisition spike
 
 ## Goal
 
-Measure actual Instagram acquisition reliability before treating it as solved.
+Measure actual acquisition reliability before treating it as solved.
 
-## Test corpus
+## Adapter
+
+```ts
+interface AcquisitionAdapter {
+  canHandle(sourceUrl: URL): boolean
+  acquire(
+    sourceUrl: URL,
+    context: AcquisitionContext
+  ): Promise<AcquisitionResult>
+}
+```
+
+The first adapter may use yt-dlp-compatible extraction. No upstream domain model may depend on yt-dlp-specific output.
+
+## Corpus
 
 Use 20–30 Reels the user can legitimately access, covering:
 
 - public Reel;
 - location in caption;
 - location spoken only;
-- location visible in signage only;
+- location visible only;
 - several locations;
 - website shown on screen;
 - non-English speech;
 - music-heavy Reel;
 - Reel with no useful location;
-- Reel whose download is unavailable;
-- Reel requiring an authenticated user session, if appropriate.
-
-## Adapter
-
-Initial adapter may use yt-dlp-compatible extraction.
-
-Treat it as replaceable from day one.
+- unavailable download;
+- authenticated-session case where appropriate.
 
 Record structured failure classes:
 
-- `UNSUPPORTED_URL`
-- `AUTH_REQUIRED`
-- `MEDIA_UNAVAILABLE`
-- `RATE_LIMITED`
-- `NETWORK_ERROR`
-- `TOO_LARGE`
-- `TOO_LONG`
-- `INVALID_MEDIA`
-- `EXTRACTOR_ERROR`
-- `UNKNOWN`
+```text
+UNSUPPORTED_URL
+AUTH_REQUIRED
+MEDIA_UNAVAILABLE
+RATE_LIMITED
+NETWORK_ERROR
+TOO_LARGE
+TOO_LONG
+INVALID_MEDIA
+EXTRACTOR_ERROR
+UNKNOWN
+```
 
-Do not expose raw downloader stack traces to the user.
+Do not surface raw downloader stack traces to users.
 
 ## Manual fallback
-
-If acquisition fails:
 
 ```text
 Could not retrieve this Reel automatically.
@@ -371,22 +556,22 @@ Could not retrieve this Reel automatically.
 [Keep as URL only]
 ```
 
-Preserve the capture either way.
+The capture remains durable.
 
-## Pass criteria
+## Phase 4 decision gate
 
-No target success percentage should be invented before the spike.
+Do not invent a target success percentage before measurement.
 
 Record:
 
 - automatic acquisition rate;
 - failure distribution;
-- whether authenticated cookies materially improve success;
+- effect of authenticated cookies;
 - average media size;
 - processing duration;
-- breakage patterns.
+- recurrent breakage modes.
 
-Then decide whether the adapter is viable for daily use.
+Proceed only after deciding whether the adapter is usable enough for daily capture and documenting the fallback for failures.
 
 ---
 
@@ -394,223 +579,233 @@ Then decide whether the adapter is viable for daily use.
 
 ## Goal
 
-Create small, useful evidence without sending a full video into Work.
+Create bounded evidence useful to Work without sending the full video.
 
-## Frame extraction
+## Validation
 
-Start with maximum 16 frames.
+Use `ffprobe` before decode.
 
-Algorithm:
+Initial hard limits:
 
-1. probe duration;
-2. scene-change detection;
-3. choose highest-information scene frames;
-4. if too few, add evenly spaced frames;
-5. resize to max 1600 px width;
-6. encode as WebP/JPEG with sensible quality;
-7. preserve timestamps.
+- max input: 100 MB;
+- max duration: 5 minutes;
+- max retained frames: 16;
+- max frame width: 1600 px;
+- max transcript submitted to Work: 30,000 characters.
 
-Do not run OCR as an independent hard dependency initially. Work can inspect the representative frames.
+Reject invalid or over-limit media before expensive processing.
 
-If later testing shows text is routinely missed, add local OCR as another evidence channel.
+## Frames
+
+Start with:
+
+1. first meaningful/poster frame;
+2. scene-change candidates;
+3. high-information candidates when cheaply detectable;
+4. evenly spaced fallback frames.
+
+Store timestamp + SHA-256 + byte size + MIME type.
+
+OCR is not a V1 hard dependency.
 
 ## Audio
 
-- extract mono speech track;
-- local whisper.cpp;
-- keep timestamped segments;
-- cap submitted transcript length;
-- detect/transcribe language automatically initially.
-
-## Caption
-
-Acquisition adapter returns caption/creator where available.
-
-If unavailable, represent it explicitly as unavailable rather than empty-as-success.
-
-## Pass criteria
-
-Against the acquisition corpus:
-
-- [ ] important visible venue names are present in at least one retained frame;
-- [ ] spoken venue mentions survive local transcription often enough to be useful;
-- [ ] evidence page stays bounded/fast;
-- [ ] raw video is not required by Work for the normal path.
-
----
-
-# Phase 6 — Gmail trigger transport
-
-## Goal
-
-Automatically wake Work when evidence is ready.
-
-## Mail adapter
-
-Implement interface from `WORK_SETUP.md`.
-
-Zero-incremental-cost initial implementation:
-
-- Google Apps Script web endpoint;
-- fixed recipient;
-- fixed subject prefix;
-- HMAC-authenticated request;
-- timestamp freshness;
-- fixed body template.
-
-The backend records the trigger idempotency key **before** dispatch.
-
-## Idempotency
-
 ```text
-trigger_idempotency_key =
-  "work:" + ai_job_id + ":" + attempt
+video
+→ mono speech-oriented audio
+→ whisper.cpp
+→ timestamped transcript
 ```
 
-If the backend loses the response after a send attempt, do not blindly create a new AI attempt.
+Represent unavailable caption/transcript explicitly rather than as an empty successful artifact.
 
-Reconcile/allow the existing attempt to time out first.
+## Phase 5 acceptance gate
 
-## Integration health
-
-Expose:
-
-- last trigger sent;
-- last Work job opened;
-- recent open/result rate.
-
-If Gmail is disconnected or Work task is paused, the app cannot detect that directly through OpenAI. Infer operational failure only from stalled-job patterns and show a diagnostic checklist, not a false precise diagnosis.
+- [ ] important visible venue names appear in retained frames often enough to be useful;
+- [ ] spoken venue names survive transcription often enough to be useful;
+- [ ] evidence page remains bounded and responsive;
+- [ ] normal Work path does not require raw video;
+- [ ] partial worker failure cannot mark evidence complete.
 
 ---
 
-# Phase 7 — Candidate review
+# Phase 6 — Production Work trigger
 
 ## Goal
 
-Make human confirmation faster than re-watching the Reel.
+Wake Work automatically after evidence becomes ready.
 
-## Mobile review UI
+## Job creation
 
-Each candidate card:
+```text
+EVIDENCE_READY
+→ create ai_job attempt
+→ create 256-bit Work secret
+→ store secret hash + expiry
+→ AI_TRIGGER_QUEUED
+→ dispatch Gmail envelope
+→ AI_TRIGGER_SENT
+```
 
-- checkbox/select state;
-- place/website icon;
+Implement the mailer interface in `WORK_SETUP.md`.
+
+Initial zero-incremental-cost adapter: Google Apps Script.
+
+Authenticate backend → Apps Script requests with:
+
+- timestamp;
+- body hash;
+- HMAC;
+- short freshness window.
+
+The script uses a fixed recipient, fixed subject prefix and fixed body template. The caller cannot select arbitrary recipients or free-form content.
+
+Record the trigger idempotency key before dispatch.
+
+Do not create a new AI attempt simply because a mail-send response was lost.
+
+## Phase 6 acceptance gate
+
+- [ ] duplicate dispatch calls cannot produce multiple active attempts;
+- [ ] trigger contains no evidence content;
+- [ ] stalled Work job is detectable by timeout state;
+- [ ] retry rotates secret and supersedes prior attempt;
+- [ ] manual JSON import remains available.
+
+---
+
+# Phase 7 — Candidate review and confirmation
+
+## Goal
+
+Make review faster than re-watching the Reel.
+
+Candidate card:
+
+- selected state;
+- kind;
 - name;
 - address/domain;
-- confidence label;
 - verification status;
-- top 1–3 evidence snippets;
-- duplicate warning;
+- confidence;
+- strongest evidence;
+- duplicate suggestion;
 - Edit.
 
 Actions:
 
 - Confirm selected;
 - Reject;
+- Edit;
 - Add missing;
-- Merge into existing.
+- Merge with existing.
 
-Avoid showing raw JSON in normal use.
+Evidence drill-down shows caption excerpt, transcript timestamp, frame and verification source.
 
-## Evidence drill-down
+Never auto-merge places based only on fuzzy name similarity.
 
-Tap evidence to view:
+## Phase 7 acceptance gate
 
-- caption excerpt;
-- transcript timestamp;
-- frame;
-- verification URL.
-
-Do not autoplay source video.
-
-## Pass criteria
-
-- [ ] user can fix wrong branch/address before save;
-- [ ] candidate can be rejected independently;
-- [ ] missing place can be manually added;
-- [ ] duplicate suggestion never auto-merges;
-- [ ] confirmed entity retains source Reel provenance.
+- [ ] wrong branch/address can be corrected before save;
+- [ ] each candidate can be independently rejected;
+- [ ] missing candidate can be manually added;
+- [ ] duplicate suggestion never silently merges;
+- [ ] confirmation retains source-Reel provenance;
+- [ ] stale review revision fails safely.
 
 ---
 
-# Phase 8 — Retention and cleanup
+# Phase 8 — Library and retention
 
-## Goal
+## V1 Library
 
-Raw media does not accumulate indefinitely.
+Only:
 
-## Cleanup
+- search;
+- place/website filter;
+- entity detail;
+- source Reels;
+- delete.
 
-Scheduled backend/DB job:
+Defer tags, collections, maps, itineraries and recommendations.
 
-1. find expired artifacts;
-2. delete object storage bytes;
-3. mark metadata deleted;
-4. audit;
-5. retry failures.
+## Retention
 
-Default policy:
+Default:
 
-- video/audio: 24h after candidates ready;
-- frames/transcript: 7d after confirmation;
-- failed captures: 7d unless retry pending.
+| Artifact | Retention |
+|---|---:|
+| source video/audio | 24h after candidates ready |
+| frames/transcript | 7d after confirmation |
+| failed-job media | 7d unless retry pending |
+| immutable Work result | retained for audit |
+| confirmed entity + provenance | until user deletes |
 
-## Pass criteria
+Cleanup pipeline:
 
-- [ ] deletion verified at object-store level;
-- [ ] failed deletion remains retryable;
-- [ ] cleanup backlog visible;
-- [ ] confirmed places/websites remain after source media purge.
+```text
+find expired metadata
+→ delete storage object
+→ verify deletion result
+→ mark deleted
+→ audit
+→ retry failures
+```
+
+Never mark an object deleted before storage deletion succeeds or is positively known already absent.
 
 ---
 
-# Phase 9 — Hardening before regular use
+# Phase 9 — Hardening and operational readiness
 
-## Security
+## Security tests
 
-Run the checklist in `SECURITY.md`.
+Automate:
 
-Especially:
-
-- prompt injection fixture tests;
-- SSRF tests including redirect-to-private-IP;
-- callback token cross-job tests;
-- stale attempt tests;
-- XSS payload tests;
+- RLS isolation;
+- cross-job Work session access;
+- cross-capture artifact access;
+- expired/revoked Work secrets;
+- stale attempt submission;
+- CSRF failure;
+- origin mismatch;
+- prompt-injection fixtures;
+- XSS evidence payloads;
+- SSRF including redirect-to-private-IP;
+- oversized result payloads;
 - file-size/duration bombs;
-- RLS tests;
 - secret scanning.
 
-## Reliability
+## Reliability tests
 
-Test:
+Exercise:
 
 - phone closes immediately after share;
-- same Reel shared twice quickly;
+- same Reel shared twice concurrently;
 - worker offline for a day;
-- worker crashes mid-download;
+- worker crash mid-download;
 - Gmail trigger delayed;
 - Work opens old attempt after retry;
-- Work submits malformed JSON;
-- Work produces no candidates;
+- malformed Work JSON;
+- empty candidates;
 - Work submits twice;
-- retention cleanup runs during retry.
+- retention runs while retry is pending.
 
-## Recovery UX
+## Recovery invariant
 
-Every nonterminal state must have one of:
+Every nonterminal state must have at least one of:
 
 - automatic retry;
 - visible Retry;
 - Manual upload;
-- Manual Work JSON import;
+- Import Work JSON;
 - Cancel.
 
-There should be no permanent spinner state.
+There must be no state whose only recovery is direct database editing.
 
 ---
 
-# Suggested repository structure
+# Repository structure
 
 ```text
 reel-extract/
@@ -630,11 +825,11 @@ reel-extract/
 │  ├─ auth/
 │  ├─ captures/
 │  ├─ contracts/
+│  ├─ db/
 │  ├─ security/
 │  ├─ storage/
 │  └─ work/
 ├─ contracts/
-│  └─ work-result.schema.json
 ├─ supabase/
 │  └─ migrations/
 ├─ worker/
@@ -648,47 +843,71 @@ reel-extract/
 └─ tests/
 ```
 
-Keep worker and web app in one repository initially. The protocol boundary is still explicit, while versioning/deployment remains simpler.
+Keep web app and worker in one repository initially while preserving a strict protocol boundary.
+
+---
+
+# First implementation slice
+
+The first implementation commit after this plan is Phase 0 infrastructure only:
+
+```text
+chore: scaffold Next.js application
+feat: add Work result contract validation
+feat: add synthetic Phase 0 fixture
+feat: add Work secret hashing
+feat: add signed job-scoped Work session
+feat: add CSRF-bound result submission
+feat: add isolated Work evidence page
+feat: add idempotent result semantics
+feat: add Supabase Phase 0 persistence adapter/migration
+test: add schema/session/idempotency tests
+docs: add Phase 0 local/deployed setup
+```
+
+Do not add Instagram acquisition or worker code to this slice.
+
+The question this slice must answer is:
+
+> Can ChatGPT Work safely and reliably serve as the AI execution layer without a metered LLM API?
 
 ---
 
 # Definition of V1 done
 
-V1 is done when a representative successful flow is:
+V1 is complete when:
 
-1. User taps Share on an Instagram Reel.
-2. Reel Extract appears in Android share targets.
-3. Capture appears immediately in Inbox.
-4. Local worker prepares evidence.
-5. Gmail triggers Work.
-6. Work returns valid candidate places/websites.
-7. User receives/observes ready state.
-8. User edits/selects and confirms.
-9. Confirmed entities appear in Library.
-10. Sharing the same Reel again finds the existing capture.
-11. Raw media expires automatically.
-12. Failure at any external boundary has a visible recovery action.
-13. No metered LLM API is required.
+1. Reel Extract appears in the Android Share sheet.
+2. Sharing a Reel creates or retrieves the correct capture.
+3. Capture persists after the browser closes.
+4. Local worker picks it up without inbound home-network access.
+5. Evidence is prepared locally and bounded.
+6. Gmail triggers Work without an LLM API call.
+7. Work returns structured places/websites or the documented manual JSON fallback works.
+8. User can edit/reject/add/merge candidates.
+9. Nothing becomes canonical without explicit confirmation.
+10. Confirmed entities remain searchable after raw media deletion.
+11. Re-sharing the same Reel does not silently duplicate data.
+12. Every external failure has a visible recovery action.
+13. Temporary media is purged automatically.
+14. Routine operation has no metered LLM cost.
 
 ---
 
-# What not to build yet
+# Explicitly deferred
 
-Until V1 is in regular use, avoid:
+Until the V1 capture loop is in regular use, do not build:
 
-- collections/tags beyond a minimal future-proof field;
+- other social platforms;
 - maps;
 - trip planning;
 - recommendation ranking;
 - automatic itinerary insertion;
 - multi-user collaboration;
-- semantic search/vector DB;
+- semantic/vector search;
 - OCR microservices;
-- multiple social platforms;
 - permanent video archive;
 - push notifications;
-- fancy AI confidence visualization.
+- elaborate confidence visualizations.
 
-The key product question is still:
-
-> Is “Share Reel → review useful structured candidates” reliable enough to become a habit?
+The next engineering action is Phase 0 implementation, not the full application.
