@@ -14,56 +14,37 @@ const supabaseUrl = required("SUPABASE_URL").replace(/\/$/, "");
 const serviceRoleKey = required("SUPABASE_SERVICE_ROLE_KEY");
 const appOrigin = new URL(required("APP_ORIGIN")).origin;
 
-const headers = {
-  apikey: serviceRoleKey,
-  authorization: `Bearer ${serviceRoleKey}`,
-  "content-type": "application/json",
-  accept: "application/json"
-};
-
-const currentUrl = new URL(`${supabaseUrl}/rest/v1/phase0_work_jobs`);
-currentUrl.searchParams.set("id", `eq.${JOB_ID}`);
-currentUrl.searchParams.set("select", "attempt");
-currentUrl.searchParams.set("limit", "1");
-
-const currentResponse = await fetch(currentUrl, { headers });
-if (!currentResponse.ok) {
-  throw new Error(
-    `Unable to read Phase 0 job: HTTP ${currentResponse.status} ${await currentResponse.text()}`
-  );
-}
-
-const current = await currentResponse.json();
-const attempt = (current[0]?.attempt ?? 0) + 1;
 const secret = randomBytes(32).toString("base64url");
 const secretHash = createHash("sha256").update(secret).digest("hex");
 const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-const upsertUrl = new URL(`${supabaseUrl}/rest/v1/phase0_work_jobs`);
-upsertUrl.searchParams.set("on_conflict", "id");
-
-const response = await fetch(upsertUrl, {
-  method: "POST",
-  headers: {
-    ...headers,
-    prefer: "resolution=merge-duplicates,return=minimal"
-  },
-  body: JSON.stringify({
-    id: JOB_ID,
-    attempt,
-    secret_hash: secretHash,
-    secret_expires_at: expiresAt,
-    status: "AI_TRIGGER_SENT",
-    result_sha256: null,
-    opened_at: null,
-    updated_at: new Date().toISOString()
-  })
-});
+const response = await fetch(
+  `${supabaseUrl}/rest/v1/rpc/phase0_rotate_work_job`,
+  {
+    method: "POST",
+    headers: {
+      apikey: serviceRoleKey,
+      authorization: `Bearer ${serviceRoleKey}`,
+      "content-type": "application/json",
+      accept: "application/json"
+    },
+    body: JSON.stringify({
+      p_job_id: JOB_ID,
+      p_secret_hash: secretHash,
+      p_expires_at: expiresAt
+    })
+  }
+);
 
 if (!response.ok) {
   throw new Error(
-    `Unable to seed Phase 0 job: HTTP ${response.status} ${await response.text()}`
+    `Unable to rotate Phase 0 job: HTTP ${response.status} ${await response.text()}`
   );
+}
+
+const attempt = await response.json();
+if (!Number.isInteger(attempt) || attempt < 1) {
+  throw new Error(`Unexpected Phase 0 attempt: ${String(attempt)}`);
 }
 
 const jobUrl = `${appOrigin}/work/${JOB_ID}#${secret}`;

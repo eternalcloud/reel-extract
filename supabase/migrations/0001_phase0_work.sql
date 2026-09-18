@@ -56,6 +56,57 @@ revoke all on table public.phase0_work_jobs from public, anon, authenticated;
 revoke all on table public.phase0_work_results from public, anon, authenticated;
 revoke all on table public.phase0_work_candidates from public, anon, authenticated;
 
+create or replace function public.phase0_rotate_work_job(
+  p_job_id uuid,
+  p_secret_hash text,
+  p_expires_at timestamptz
+)
+returns integer
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_attempt integer;
+begin
+  if length(p_secret_hash) <> 64 then
+    raise exception 'invalid secret hash';
+  end if;
+
+  insert into public.phase0_work_jobs (
+    id,
+    attempt,
+    secret_hash,
+    secret_expires_at,
+    status,
+    result_sha256,
+    opened_at,
+    updated_at
+  )
+  values (
+    p_job_id,
+    1,
+    p_secret_hash,
+    p_expires_at,
+    'AI_TRIGGER_SENT',
+    null,
+    null,
+    now()
+  )
+  on conflict (id) do update
+    set attempt = public.phase0_work_jobs.attempt + 1,
+        secret_hash = excluded.secret_hash,
+        secret_expires_at = excluded.secret_expires_at,
+        status = 'AI_TRIGGER_SENT',
+        result_sha256 = null,
+        opened_at = null,
+        updated_at = now()
+  returning attempt into v_attempt;
+
+  return v_attempt;
+end;
+$$;
+
 create or replace function public.phase0_commit_work_result(
   p_job_id uuid,
   p_attempt integer,
@@ -146,6 +197,11 @@ begin
   return 'accept';
 end;
 $$;
+
+revoke all on function public.phase0_rotate_work_job(uuid, text, timestamptz)
+  from public, anon, authenticated;
+grant execute on function public.phase0_rotate_work_job(uuid, text, timestamptz)
+  to service_role;
 
 revoke all on function public.phase0_commit_work_result(uuid, integer, text, jsonb)
   from public, anon, authenticated;
