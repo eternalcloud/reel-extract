@@ -9,10 +9,42 @@ export class HttpInputError extends Error {
 }
 
 export async function readBoundedBody(
-  _body: ReadableStream<Uint8Array> | null,
-  _maxBytes: number
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number
 ): Promise<Uint8Array> {
-  throw new HttpInputError("NOT_IMPLEMENTED", 501);
+  if (body === null) {
+    return new Uint8Array();
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("payload too large");
+        throw new HttpInputError("PAYLOAD_TOO_LARGE", 413);
+      }
+
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const combined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return combined;
 }
 
 export async function readBoundedJson(
@@ -34,11 +66,8 @@ export async function readBoundedJson(
     }
   }
 
-  const text = await request.text();
-  const actualBytes = new TextEncoder().encode(text).byteLength;
-  if (actualBytes > maxBytes) {
-    throw new HttpInputError("PAYLOAD_TOO_LARGE", 413);
-  }
+  const bytes = await readBoundedBody(request.body, maxBytes);
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 
   try {
     return JSON.parse(text);
