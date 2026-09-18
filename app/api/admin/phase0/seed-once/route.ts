@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
 const FIXED_SECRET_HASH =
-  "bd4f027d7459884ee14d7bc9ba05b965db6ba33234de5e77491e4c68758c7fee";
+  "51f8fec7d40dcc80c64bed17974f3dd2c4672a1b9e022893bd2883641a7a12ca";
 
 function requiredEnv(name: "SUPABASE_URL" | "SUPABASE_SECRET_KEY"): string {
   const value = process.env[name];
