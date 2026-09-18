@@ -1,6 +1,4 @@
 import { NextResponse } from "next/server";
-import { getWorkStore } from "../../../../../lib/work/runtime";
-import { canReuseFixedSeed } from "../../../../../lib/work/phase0-seed-once";
 
 export const runtime = "nodejs";
 
@@ -18,37 +16,9 @@ function requiredEnv(name: "SUPABASE_URL" | "SUPABASE_SECRET_KEY"): string {
 
 export async function POST() {
   try {
-    const nowMs = Date.now();
-    const store = getWorkStore();
-    const existing = await store.getJob(JOB_ID);
-
-    if (
-      canReuseFixedSeed(
-        existing
-          ? {
-              attempt: existing.attempt,
-              secretHash: existing.secretHash,
-              secretExpiresAt: existing.secretExpiresAt
-            }
-          : null,
-        FIXED_SECRET_HASH,
-        nowMs
-      )
-    ) {
-      return NextResponse.json(
-        {
-          jobId: JOB_ID,
-          attempt: existing!.attempt,
-          expiresAt: new Date(existing!.secretExpiresAt).toISOString(),
-          disposition: "reused"
-        },
-        { headers: { "cache-control": "no-store" } }
-      );
-    }
-
     const supabaseUrl = requiredEnv("SUPABASE_URL").replace(/\/$/, "");
     const secretKey = requiredEnv("SUPABASE_SECRET_KEY");
-    const expiresAt = new Date(nowMs + 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
     const response = await fetch(
       `${supabaseUrl}/rest/v1/rpc/phase0_rotate_work_job`,
@@ -70,9 +40,18 @@ export async function POST() {
 
     if (!response.ok) {
       const detail = (await response.text()).slice(0, 500);
-      console.error("Phase 0 seed-once failed", response.status, detail);
+      const supabaseHost = new URL(supabaseUrl).hostname;
+      console.error(
+        "Phase 0 seed-once failed",
+        response.status,
+        supabaseHost,
+        detail
+      );
       return NextResponse.json(
-        { error: "SUPABASE_SEED_FAILED" },
+        {
+          error: "SUPABASE_SEED_FAILED",
+          supabaseHost
+        },
         { status: 502 }
       );
     }
