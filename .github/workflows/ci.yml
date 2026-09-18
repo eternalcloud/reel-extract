@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  test-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -21,3 +21,4 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm test
+      - run: npm run build
