@@ -15,9 +15,9 @@ type MockFetch = (
 
 describe("SupabaseWorkStore", () => {
   const url = "https://project.supabase.co";
-  const key = "service-role-test-key";
+  const key = "sb_secret_phase0_test_key";
 
-  it("maps a PostgREST job row into the domain record", async () => {
+  it("maps a PostgREST job row into the domain record using a modern secret key", async () => {
     const fetchImpl = vi.fn<MockFetch>(async (_input, _init) =>
       jsonResponse([
         {
@@ -34,7 +34,7 @@ describe("SupabaseWorkStore", () => {
 
     const store = new SupabaseWorkStore({
       url,
-      serviceRoleKey: key,
+      secretKey: key,
       fetchImpl
     });
 
@@ -53,21 +53,15 @@ describe("SupabaseWorkStore", () => {
     const [requestUrl, init] = fetchImpl.mock.calls[0]!;
     expect(String(requestUrl)).toContain("/rest/v1/phase0_work_jobs");
     expect(String(requestUrl)).toContain("id=eq.");
-    expect(init?.headers).toMatchObject({
-      apikey: key,
-      authorization: `Bearer ${key}`
-    });
+    expect(init?.headers).toMatchObject({ apikey: key });
+    expect(init?.headers).not.toHaveProperty("authorization");
   });
 
   it("marks opened only for the exact job attempt", async () => {
     const fetchImpl = vi.fn<MockFetch>(
       async (_input, _init) => new Response(null, { status: 204 })
     );
-    const store = new SupabaseWorkStore({
-      url,
-      serviceRoleKey: key,
-      fetchImpl
-    });
+    const store = new SupabaseWorkStore({ url, secretKey: key, fetchImpl });
 
     await store.markOpened(
       "11111111-1111-4111-8111-111111111111",
@@ -90,11 +84,7 @@ describe("SupabaseWorkStore", () => {
       const fetchImpl = vi.fn<MockFetch>(async (_input, _init) =>
         jsonResponse(disposition)
       );
-      const store = new SupabaseWorkStore({
-        url,
-        serviceRoleKey: key,
-        fetchImpl
-      });
+      const store = new SupabaseWorkStore({ url, secretKey: key, fetchImpl });
 
       const result = await store.commitResult({
         jobId: "11111111-1111-4111-8111-111111111111",
@@ -121,7 +111,7 @@ describe("SupabaseWorkStore", () => {
   it("fails closed on a non-success response or unexpected RPC value", async () => {
     const failing = new SupabaseWorkStore({
       url,
-      serviceRoleKey: key,
+      secretKey: key,
       fetchImpl: async (_input, _init) => jsonResponse({ message: "nope" }, 500)
     });
 
@@ -129,7 +119,7 @@ describe("SupabaseWorkStore", () => {
 
     const unexpected = new SupabaseWorkStore({
       url,
-      serviceRoleKey: key,
+      secretKey: key,
       fetchImpl: async (_input, _init) => jsonResponse("wat")
     });
 
