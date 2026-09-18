@@ -65,6 +65,7 @@ The local worker is intentionally outbound-only: it polls for work and uploads e
 - [ChatGPT Work + Gmail setup](docs/WORK_SETUP.md)
 - [Data model and contracts](docs/DATA_MODEL.md)
 - [Implementation plan](docs/IMPLEMENTATION_PLAN.md)
+- [Phase 0 runbook](docs/PHASE0.md)
 - [Work result JSON Schema](contracts/work-result.schema.json)
 
 ## Important product constraint
@@ -89,4 +90,8 @@ No itinerary builder, recommendation engine, social features, or automatic savin
 
 ## Status
 
-Design phase. Implementation should start with the Phase 0 integration spike in [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+**Phase 0 implementation is underway.**
+
+The current slice implements the scoped Work job surface, synthetic evidence, schema validation, signed job sessions, CSRF/origin checks, idempotent result handling, durable Supabase persistence, and CI tests/build verification.
+
+The next live gate is the end-to-end Gmail → ChatGPT Work → Reel Extract callback described in [docs/PHASE0.md](docs/PHASE0.md).

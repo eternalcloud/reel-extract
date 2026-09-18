@@ -1,0 +1,94 @@
+:root {
+  color-scheme: light;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #f5f3ee;
+  color: #25231f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.shell,
+.work-shell {
+  width: min(880px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 56px 0 96px;
+}
+
+.work-shell {
+  width: min(960px, calc(100% - 32px));
+}
+
+.eyebrow {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+h1 {
+  font-size: clamp(2rem, 6vw, 4rem);
+  line-height: 1;
+  max-width: 14ch;
+}
+
+h2 {
+  margin-top: 2.5rem;
+}
+
+section {
+  border-top: 1px solid #c9c4b8;
+  margin-top: 2rem;
+  padding-top: 1rem;
+}
+
+.security-notice {
+  border: 2px solid currentColor;
+  padding: 16px;
+}
+
+pre,
+textarea {
+  width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.9rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #fff;
+  border: 1px solid #c9c4b8;
+  padding: 16px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button,
+a {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid currentColor;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+figure {
+  margin: 0;
+}
+
+figure img {
+  width: 100%;
+  height: auto;
+  border: 1px solid #c9c4b8;
+}
+
+.error {
+  font-weight: 700;
+}

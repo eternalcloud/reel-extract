@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">
+  <rect width="960" height="540" fill="#eee9de"/>
+  <rect x="110" y="140" width="740" height="260" rx="22" fill="#fff"/>
+  <text x="480" y="245" text-anchor="middle" font-family="Arial, sans-serif" font-size="62" fill="#222">example.com</text>
+  <text x="480" y="320" text-anchor="middle" font-family="Arial, sans-serif" font-size="26" fill="#555">Synthetic Reel frame · untrusted evidence</text>
+</svg>
