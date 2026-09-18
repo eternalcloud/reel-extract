@@ -1,8 +1,9 @@
 export type SubmissionDisposition = "accept" | "replay" | "conflict";
 
 export function classifySubmission(
-  _existingSha256: string | null,
-  _incomingSha256: string
+  existingSha256: string | null,
+  incomingSha256: string
 ): SubmissionDisposition {
-  return "conflict";
+  if (existingSha256 === null) return "accept";
+  return existingSha256 === incomingSha256 ? "replay" : "conflict";
 }
