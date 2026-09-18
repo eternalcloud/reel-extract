@@ -40,16 +40,17 @@ class FakeStore implements WorkStore {
     }
   }
 
-  async getResultSha256(jobId: string, attempt: number) {
-    return jobId === this.job.id && attempt === this.job.attempt
-      ? this.job.resultSha256
-      : null;
-  }
+  async commitResult(input: PersistWorkResultInput) {
+    if (this.job.resultSha256 === null) {
+      this.persisted.push(input);
+      this.job.resultSha256 = input.sha256;
+      this.job.status = "CANDIDATES_READY";
+      return "accept" as const;
+    }
 
-  async persistResult(input: PersistWorkResultInput) {
-    this.persisted.push(input);
-    this.job.resultSha256 = input.sha256;
-    this.job.status = "CANDIDATES_READY";
+    return this.job.resultSha256 === input.sha256
+      ? ("replay" as const)
+      : ("conflict" as const);
   }
 }
 
@@ -129,40 +130,48 @@ describe("submitWorkResult", () => {
     });
   }
 
-  it("accepts and persists a valid first result", async () => {
-    const store = new FakeStore();
-    const session = await openedSession(store);
-
-    const result = await submitWorkResult({
+  function submit(store: FakeStore, session: Awaited<ReturnType<typeof openedSession>>, body: unknown) {
+    return submitWorkResult({
       store,
       sessionToken: session.sessionToken,
       csrfToken: session.csrfToken,
       origin: "https://reel.example.com",
       expectedOrigin: "https://reel.example.com",
       signingKey,
-      body: validWorkResult,
+      body,
       nowMs: 1_000_100
     });
+  }
+
+  it("accepts and persists a valid first result", async () => {
+    const store = new FakeStore();
+    const session = await openedSession(store);
+
+    const result = await submit(store, session, validWorkResult);
 
     expect(result.disposition).toBe("accepted");
     expect(store.persisted).toHaveLength(1);
     expect(store.persisted[0].attempt).toBe(1);
   });
 
+  it("makes concurrent identical callbacks idempotent at the store boundary", async () => {
+    const store = new FakeStore();
+    const session = await openedSession(store);
+
+    const results = await Promise.all([
+      submit(store, session, validWorkResult),
+      submit(store, session, validWorkResult)
+    ]);
+
+    expect(results.map((r) => r.disposition).sort()).toEqual(["accepted", "replay"]);
+    expect(store.persisted).toHaveLength(1);
+  });
+
   it("treats the same semantic result as a replay and rejects a conflicting second result", async () => {
     const store = new FakeStore();
     const session = await openedSession(store);
 
-    const first = await submitWorkResult({
-      store,
-      sessionToken: session.sessionToken,
-      csrfToken: session.csrfToken,
-      origin: "https://reel.example.com",
-      expectedOrigin: "https://reel.example.com",
-      signingKey,
-      body: validWorkResult,
-      nowMs: 1_000_100
-    });
+    const first = await submit(store, session, validWorkResult);
 
     const reordered = {
       warnings: validWorkResult.warnings,
@@ -172,16 +181,7 @@ describe("submitWorkResult", () => {
       schema_version: validWorkResult.schema_version
     };
 
-    const replay = await submitWorkResult({
-      store,
-      sessionToken: session.sessionToken,
-      csrfToken: session.csrfToken,
-      origin: "https://reel.example.com",
-      expectedOrigin: "https://reel.example.com",
-      signingKey,
-      body: reordered,
-      nowMs: 1_000_200
-    });
+    const replay = await submit(store, session, reordered);
 
     expect(replay).toEqual({ disposition: "replay", sha256: first.sha256 });
     expect(store.persisted).toHaveLength(1);
@@ -190,16 +190,7 @@ describe("submitWorkResult", () => {
     conflict.warnings = ["different"];
 
     await expectWorkError(
-      submitWorkResult({
-        store,
-        sessionToken: session.sessionToken,
-        csrfToken: session.csrfToken,
-        origin: "https://reel.example.com",
-        expectedOrigin: "https://reel.example.com",
-        signingKey,
-        body: conflict,
-        nowMs: 1_000_300
-      }),
+      submit(store, session, conflict),
       "WORK_RESULT_CONFLICT",
       409
     );
@@ -240,32 +231,14 @@ describe("submitWorkResult", () => {
     );
 
     await expectWorkError(
-      submitWorkResult({
-        store,
-        sessionToken: session.sessionToken,
-        csrfToken: session.csrfToken,
-        origin: "https://reel.example.com",
-        expectedOrigin: "https://reel.example.com",
-        signingKey,
-        body: { nope: true },
-        nowMs: 1_000_100
-      }),
+      submit(store, session, { nope: true }),
       "INVALID_WORK_RESULT",
       400
     );
 
     const mismatch = { ...validWorkResult, attempt: 2 };
     await expectWorkError(
-      submitWorkResult({
-        store,
-        sessionToken: session.sessionToken,
-        csrfToken: session.csrfToken,
-        origin: "https://reel.example.com",
-        expectedOrigin: "https://reel.example.com",
-        signingKey,
-        body: mismatch,
-        nowMs: 1_000_100
-      }),
+      submit(store, session, mismatch),
       "JOB_ATTEMPT_MISMATCH",
       409
     );
